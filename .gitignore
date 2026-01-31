@@ -1,0 +1,79 @@
+# =========================
+# Node.js Core
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+.pnpm-debug.log
+
+# =========================
+# Environment & Credentials
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+debug.log
+error.log
+combined.log
+
+# =========================
+# OS / IDE Files
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# Build / Output
+# =========================
+dist/
+build/
+out/
+coverage/
+.cache/
+.tmp/
+.temp/
+.next/
+.nuxt/
+.svelte-kit/
+.vercel/
+.netlify/
+.terraform/
+
+# =========================
+# Uploaded / Exported Files
+# =========================
+uploads/
+exports/
+public/uploads/
+tmp/
+*.csv
+*.xlsx
+
+# =========================
+# Misc
+# =========================
+*.pid
+*.seed
+*.tgz
+*.bak
+*.old
+
+# =========================
+# TypeScript / Compiled JS
+# =========================
+*.tsbuildinfo
+*.tscache
+*.map

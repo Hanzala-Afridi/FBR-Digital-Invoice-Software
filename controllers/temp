@@ -1,0 +1,209 @@
+// ✅ 1️⃣ POST INVOICE DATA API
+exports.postInvoiceData = async (req, res) => {
+  const invoice = req.body;
+
+  try {
+    // ✅ Validate required fields
+    const requiredFields = [
+      "invoiceType", "invoiceDate",
+      "sellerNTNCNIC", "sellerBusinessName", "sellerProvince", "sellerAddress",
+      "buyerBusinessName", "buyerProvince", "buyerAddress", "buyerRegistrationType", "items"
+    ];
+
+    const missing = requiredFields.filter(f => !invoice[f]);
+    if (missing.length > 0)
+      return res.status(400).json({ success: false, message: `Missing fields: ${missing.join(", ")}` });
+
+    // ✅ Prepare Payload
+    const fbrPayload = {
+      invoiceType: invoice.invoiceType,
+      invoiceDate: invoice.invoiceDate,
+      sellerNTNCNIC: invoice.sellerNTNCNIC,
+      sellerBusinessName: invoice.sellerBusinessName,
+      sellerProvince: invoice.sellerProvince,
+      sellerAddress: invoice.sellerAddress,
+      buyerNTNCNIC: invoice.buyerNTNCNIC || "",
+      buyerBusinessName: invoice.buyerBusinessName,
+      buyerProvince: invoice.buyerProvince,
+      buyerAddress: invoice.buyerAddress,
+      buyerRegistrationType: invoice.buyerRegistrationType,
+      invoiceRefNo: invoice.invoiceRefNo || "",
+      items: invoice.items,
+    };
+
+    // ✅ Add scenarioId only in Sandbox
+    if (process.env.FBR_ENV === "sandbox") {
+      fbrPayload.scenarioId = invoice.scenarioId || "SN001";
+    }
+
+    // ✅ Call FBR API
+    const url = getFbrUrl("post");
+    const response = await axios.post(url, fbrPayload, {
+      headers: {
+        "Authorization": `Bearer ${process.env.FBR_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 20000, // 20s
+    });
+
+    // ✅ Extract FBR invoice number (if exists)
+    const fbrInvoiceNo = response.data?.InvoiceNumber || null;
+
+    // ✅ Convert full response to JSON string for DB storage
+    const fbrResponseJson = JSON.stringify(response.data);
+
+    // ✅ Update local DB with FBR invoice number and full response
+    await db.promise().query(
+      `UPDATE invoices 
+   SET fbr_invoice_no = ?, fbr_response = ?, status = ?
+   WHERE invoice_ref_no = ?`,
+      [fbrInvoiceNo, fbrResponseJson, 'posted', invoice.invoiceRefNo]
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Invoice submitted successfully",
+      fbrInvoiceNo,
+      data: response.data,
+    });
+
+  } catch (error) {
+    console.error("❌ FBR Post Error:", error.response?.data || error.message);
+    return res.status(error.response?.status || 500).json({
+      success: false,
+      message: "Server error",
+      error: error.response?.data || error.message,
+    });
+  }
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+exports.postInvoicesByScenarioRange = async (req, res) => {
+  try {
+    const { start, end } = req.body;
+
+    if (!start || !end) {
+      return res.status(400).json({ error: "Please provide start and end scenario_id range" });
+    }
+
+    const token = process.env.FBR_ACCESS_TOKEN;
+    const PostAPI = process.env.FBR_POST_API;
+
+    // 1️⃣ Fetch invoices in the given range
+    const [invoices] = await db.promise().query(
+      `SELECT * FROM invoices WHERE scenario_id BETWEEN ? AND ? AND status != 'posted'`,
+      [start, end]
+    );
+
+    if (invoices.length === 0) {
+      return res.status(404).json({ message: "No unposted invoices found in this range." });
+    }
+
+    const results = [];
+
+    // 2️⃣ Loop through each invoice and post to FBR
+    for (const invoice of invoices) {
+      try {
+        const [items] = await db.promise().query(
+          `SELECT * FROM invoice_items WHERE invoice_id = ?`,
+          [invoice.id]
+        );
+
+        const fbrPayload = {
+          invoiceType: invoice.invoice_type,
+          invoiceDate: invoice.invoice_date,
+          invoiceRefNo: invoice.invoice_ref_no,
+          scenarioId: invoice.scenario_id,
+          sellerNTNCNIC: invoice.seller_ntn_cnic,
+          sellerBusinessName: invoice.seller_business_name,
+          sellerProvince: invoice.seller_province,
+          sellerAddress: invoice.seller_address,
+          buyerNTNCNIC: invoice.buyer_ntn_cnic,
+          buyerBusinessName: invoice.buyer_business_name,
+          buyerProvince: invoice.buyer_province,
+          buyerAddress: invoice.buyer_address,
+          buyerRegistrationType: invoice.buyer_registration_type,
+          items: items.map(i => ({
+            hsCode: i.hs_code,
+            productDescription: i.product_description,
+            rate: i.rate_desc,
+            uoM: i.uom,
+            quantity: i.quantity,
+            totalValues: i.total_values,
+            valueSalesExcludingST: i.value_sales_excl_st,
+            fixedNotifiedValueOrRetailPrice: i.fixed_notified_value_or_retail_price,
+            salesTaxApplicable: i.sales_tax_applicable,
+            salesTaxWithheldAtSource: i.sales_tax_withheld_at_source,
+            extraTax: i.extra_tax,
+            furtherTax: i.further_tax,
+            fedPayable: i.fed_payable,
+            discount: i.discount,
+            saleType: i.sale_type,
+            sroScheduleNo: i.sro_schedule_no,
+            sroItemSerialNo: i.sro_item_serial_no
+          }))
+        };
+
+        // 3️⃣ Post to FBR API
+        const response = await axios.post(PostAPI, fbrPayload, {
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
+        });
+
+        // 4️⃣ Update invoice as posted
+        await db.promise().query(
+          `UPDATE invoices SET status='posted', fbr_irn=?, fbr_response=? WHERE id=?`,
+          [response.data.irn || null, JSON.stringify(response.data), invoice.id]
+        );
+
+        results.push({
+          invoiceId: invoice.id,
+          scenarioId: invoice.scenario_id,
+          status: "posted",
+          irn: response.data.irn || null
+        });
+
+      } catch (err) {
+        console.error(`❌ Error posting invoice ${invoice.id}:`, err.message);
+        results.push({
+          invoiceId: invoice.id,
+          scenarioId: invoice.scenario_id,
+          status: "failed",
+          error: err.message
+        });
+      }
+    }
+
+    // 5️⃣ Return result summary
+    res.json({
+      message: "Range posting completed",
+      total: results.length,
+      posted: results.filter(r => r.status === "posted").length,
+      failed: results.filter(r => r.status === "failed").length,
+      details: results
+    });
+
+  } catch (err) {
+    console.error("❌ Range Post Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
